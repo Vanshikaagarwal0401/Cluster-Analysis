@@ -1,0 +1,182 @@
+---
+title: "Cluster Analysis"
+author: "Wenjuan"
+date: ''
+output:
+  pdf_document: default
+  html_document: default
+editor_options:
+  chunk_output_type: console
+---
+#Set up for doing the analysis
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(factoextra)
+library(cluster)
+library(dplyr)
+library(psych)
+library(psychTools)
+library(readxl)
+```
+
+#Load data
+
+```{r}
+Intelligence<-read_excel("Intelligence.xls")
+```
+
+#Looking at the Data, and Basic Analysis
+
+From here, the rest of the programs describe cluster analysis of the intelligence data from Tabachnick & Fidell (1996) which contains 175 observations with values for each of the 11 tests plus age and subject number.
+
+First, we describe the data
+
+```{r}
+describe(Intelligence)
+```
+
+```{r}
+headTail(Intelligence)
+```
+
+Calculate Mahalanobis distance to identify potential outliers.
+```{r}
+Maha <- mahalanobis(Intelligence,colMeans(Intelligence),cov(Intelligence))
+print(Maha)
+```
+Based on the results, some of the distances are much higher than others. We want to identify any of the distances that are statistically significant then we need to calculate p-values.The p-value for each distance is calculated as the Chi-Square statistic of the Mahalanobis distance with k-1 degrees of freedom, where k is the number of variables.
+```{r}
+MahaPvalue <-pchisq(Maha,df=10,lower.tail = FALSE)
+print(MahaPvalue)
+print(sum(MahaPvalue<0.001))
+```
+In general, a p-value that is less than 0.001 is considered to be an outlier. In this case, there are no observations with p values less than 0.001. If there are any potential outliers identidied, you can consider dropping them for the cluster analysis. You can add the Mahalanobis distance and its p values into the data to identify which these cases are.
+
+```{r}
+IntelMaha<-cbind(Intelligence, Maha, MahaPvalue)
+```
+
+Next, we check assumptions to see whether the data are suitable for Cluster Analysis:
+
+```{r}
+IntellMatrix<-cor(Intelligence)
+```
+
+```{r}
+round(IntellMatrix, 2)
+```
+
+```{r}
+lowerCor(Intelligence)
+```
+
+Standardise each variable with mean of 0 and sd of 1
+```{r}
+Intelligence<-scale(Intelligence)
+```
+
+```{r}
+headTail(Intelligence)
+```
+
+# Doing Cluster Analysis
+
+Find the Linkage Method to Use
+
+Since we don’t know beforehand which linkage method will produce the best clusters, we can write a short function to perform hierarchical clustering using several different methods.
+
+Note that this function calculates the agglomerative coefficient of each method, which is metric that measures the strength of the clusters. The closer this value is to 1, the stronger the clusters.
+
+Define linkage methods
+```{r}
+m <- c( "average", "single", "complete", "ward")
+names(m) <- c( "average", "single", "complete", "ward")
+```
+
+Function to compute agglomerative coefficient
+```{r}
+ac <- function(x) {
+  agnes(Intelligence, method = x)$ac
+}
+```
+
+Calculate agglomerative coefficient for each clustering linkage method
+```{r}
+sapply(m, ac)
+```
+We can see that Ward’s minimum variance method produces the highest agglomerative coefficient, thus we’ll use that as the method for our final hierarchical clustering:
+
+Determine the Optimal Number of Clusters.
+To determine how many clusters the observations should be grouped in, we can use a metric known as the gap statistic, which compares the total intra-cluster variation for different values of k with their expected values for a distribution with no clustering.
+
+calculate gap statistic for each number of clusters (up to 10 clusters)
+
+```{r}
+gap_stat_h <- clusGap(Intelligence, FUN = hcut, nstart = 25, K.max = 10, B = 50)
+gap_stat_k <- clusGap(Intelligence, FUN = kmeans, nstart = 25, K.max = 10, B = 50)
+```
+
+produce plot of clusters vs. gap statistic
+```{r}
+fviz_gap_stat(gap_stat_h)
+fviz_gap_stat(gap_stat_k)
+```
+From the plot we can see that the gap statistic is high at k = 3 and 9 clusters. Thus, we’ll choose to group our observations into 3 or 9 distinct clusters.
+
+Finding distance matrix
+```{r}
+distance_mat <- dist(Intelligence, method = 'euclidean')
+```
+
+Fitting Hierarchical clustering Model to dataset
+
+```{r}
+set.seed(240)  # Setting seed
+Hierar_cl <- hclust(distance_mat, method = "ward")
+Hierar_cl
+```
+
+Plotting dendrogram
+```{r}
+plot(Hierar_cl)
+```
+
+Choosing no. of clusters
+
+Cutting tree by no. of clusters
+```{r}
+fit <- cutree(Hierar_cl, k = 3 )
+fit
+```
+
+Find number of observations in each cluster
+```{r}
+table(fit)
+```
+
+We can then append the cluster labels  of each child back to the original dataset:
+
+Append cluster labels to original data
+
+```{r}
+final_data <-cbind(Intelligence, cluster = fit)
+```
+
+Display first six rows of final data
+```{r}
+head(final_data)
+```
+
+Find mean values for each cluster
+```{r}
+hcentres<-aggregate(x=final_data, by=list(cluster=fit), FUN="mean")
+print(hcentres)
+```
+
+Kmeans clustering
+```{r}
+set.seed(55)
+k_cl <- kmeans(Intelligence,3,nstart=25)
+k_cl 
+```

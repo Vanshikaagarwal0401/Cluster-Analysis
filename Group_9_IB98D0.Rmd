@@ -1,0 +1,1179 @@
+---
+title: "Group_9_IB98D0"
+output: html_document
+date: "2024-03-11"
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(readxl)
+library(dplyr)
+library(summarytools)
+library(tidyverse)
+library(psych)
+library(psychTools)
+library(GPArotation)
+library(gridExtra)
+library(caret)
+library(scales)
+library(cluster)
+library(factoextra)
+```
+
+# Data Integrity, and Data Cleaning
+
+```{r}
+Original_data <- read_excel("loan_data_ADA_assignment.xlsx")
+#Original_data <- read.csv("loan_data_ADA_assignment.csv")
+```
+
+## Checking the summary to analyze any potential data entry errors
+```{r}
+# Check summary of the data
+summary(Original_data)
+# Check structure of the data
+str(Original_data)
+# Check NA
+(summarise_all(Original_data, ~ sum(is.na(.x))))
+```
+## Variables selection
+
+```{r}
+# We selected the initials variables for analyse by removing string, categorical variable and remove variable contains NA. now remove 29 variables, remains 24 variables
+
+df = subset(Original_data, select = -c(id, member_id, term, grade, sub_grade, emp_title, emp_length, home_ownership, verification_status, issue_d, loan_status, pymnt_plan, desc, purpose, title, zip_code, addr_state, earliest_cr_line, mths_since_last_delinq, mths_since_last_record, last_pymnt_d, next_pymnt_d, last_credit_pull_d, mths_since_last_major_derog, policy_code, loan_is_bad, tot_coll_amt, tot_cur_bal, total_credit_rv) )
+
+```
+
+```{r}
+# Check overall statistics of remaining data
+print(dfSummary(df), file = 'Summary.html')
+```
+
+```{r}
+# After checking overall statistics, we found 7 variables that have majority of observations near Zero, and show highly positive skewed from minority groups. We decide to remove these variables from clustering because these variables represent only for small groups of observation, while the most of observation is zero, the remaining variables is 17 variables
+summary(df)
+df = subset(df, select = -c(delinq_2yrs, pub_rec, total_rec_late_fee, recoveries, collection_recovery_fee, collections_12_mths_ex_med, acc_now_delinq) )
+
+```
+
+```{r}
+# We observe correlation matrix of the remaining variables to see the variables that are represent the same information, in other word it has highly correlate with each other, to select only one variable.
+lowerCor(df)
+```
+
+```{r}
+# We found that, loan_amnt, funded_amnt and funded_amnt_inv are highly correlate with each other (Correlation = 1) and same as total_pymnt and total_pymnt_inv. In this case, we select only 1 variable from each group to be represent of the group for further analysis. Now the selected variables use for cluster analysis are 14 variables.
+df = subset(df, select = -c(funded_amnt, funded_amnt_inv, total_pymnt_inv))
+```
+
+```{r}
+summary(df)
+lowerCor(df)
+```
+
+## Data Cleaning
+
+```{r}
+# NA removal
+(summarise_all(df, ~ sum(is.na(.x))))
+
+# remove observations that have NA value, 31 observations were removed.
+df <- df[!is.na(df$revol_util), ]
+df$index <- 1:nrow(df)
+
+Original_data_wo_outliers <- Original_data[!is.na(Original_data$revol_util), ]
+Original_data_wo_outliers$index <- 1:nrow(Original_data_wo_outliers)
+```
+
+## Random Sampling
+
+```{r}
+# before doing any analysis, we make a random sampling from our data set to be representative of the whole dataset
+set.seed(123)
+sp.df <- df[sample(nrow(df), 500), ] # Sampling Data
+summary(sp.df)
+
+```
+
+
+```{r}
+sample_indices <- sp.df$index
+Original_data_wo_outliers_sample <- Original_data_wo_outliers[sample_indices,]
+sp.df$index <- NULL
+Original_data_wo_outliers_sample$index <- NULL
+```
+
+
+```{r}
+# plot the sampling data
+grid.arrange(
+  ggplot(sp.df, aes(x = loan_amnt))+ geom_histogram(bins = 50)+ scale_x_continuous(labels = scales::comma),
+  ggplot(sp.df, aes(x = int_rate))+ geom_histogram(bins = 50)+ scale_x_continuous(labels = scales::comma),
+  ggplot(sp.df, aes(x = installment))+ geom_histogram(bins = 50)+ scale_x_continuous(labels = scales::comma),
+  ggplot(sp.df, aes(x = annual_inc))+ geom_histogram(bins = 50)+ scale_x_continuous(labels = scales::comma),
+  ggplot(sp.df, aes(x = dti))+ geom_histogram(bins = 50)+ scale_x_continuous(labels = scales::comma),
+  ggplot(sp.df, aes(x = inq_last_6mths))+ geom_histogram(bins = 50)+ scale_x_continuous(labels = scales::comma),
+  ggplot(sp.df, aes(x = open_acc))+ geom_histogram(bins = 50)+ scale_x_continuous(labels = scales::comma),
+  ggplot(sp.df, aes(x = revol_bal))+ geom_histogram(bins = 50)+ scale_x_continuous(labels = scales::comma),
+  ggplot(sp.df, aes(x = revol_util))+ geom_histogram(bins = 50)+ scale_x_continuous(labels = scales::comma),
+  ggplot(sp.df, aes(x = total_acc))+ geom_histogram(bins = 50)+ scale_x_continuous(labels = scales::comma),
+  ggplot(sp.df, aes(x = total_pymnt))+ geom_histogram(bins = 50)+ scale_x_continuous(labels = scales::comma),
+  ggplot(sp.df, aes(x = total_rec_prncp))+ geom_histogram(bins = 50)+ scale_x_continuous(labels = scales::comma),
+  ggplot(sp.df, aes(x = total_rec_int))+ geom_histogram(bins = 50)+ scale_x_continuous(labels = scales::comma),
+  ggplot(sp.df, aes(x = last_pymnt_amnt))+ geom_histogram(bins = 50)+ scale_x_continuous(labels = scales::comma),
+nrow=7)
+
+```
+```{r}
+# standardlize data
+preProcValues <- preProcess(sp.df, method = c("center", "scale"))
+z.df <- predict(preProcValues, sp.df) # standardlized sampling data
+
+```
+
+```{r}
+# plot the sampling data
+grid.arrange(
+  ggplot(z.df, aes(x = loan_amnt))+ geom_histogram(bins = 50) + scale_x_continuous(labels = scales::comma),
+  ggplot(z.df, aes(x = int_rate))+ geom_histogram(bins = 50) + scale_x_continuous(labels = scales::comma),
+  ggplot(z.df, aes(x = installment))+ geom_histogram(bins = 50) + scale_x_continuous(labels = scales::comma),
+  ggplot(z.df, aes(x = annual_inc))+ geom_histogram(bins = 50) + scale_x_continuous(labels = scales::comma),
+  ggplot(z.df, aes(x = dti))+ geom_histogram(bins = 50) + scale_x_continuous(labels = scales::comma),
+  ggplot(z.df, aes(x = inq_last_6mths))+ geom_histogram(bins = 50) + scale_x_continuous(labels = scales::comma),
+  ggplot(z.df, aes(x = open_acc))+ geom_histogram(bins = 50) + scale_x_continuous(labels = scales::comma),
+  ggplot(z.df, aes(x = revol_bal))+ geom_histogram(bins = 50) + scale_x_continuous(labels = scales::comma),
+  ggplot(z.df, aes(x = revol_util))+ geom_histogram(bins = 50) + scale_x_continuous(labels = scales::comma),
+  ggplot(z.df, aes(x = total_acc))+ geom_histogram(bins = 50) + scale_x_continuous(labels = scales::comma),
+  ggplot(z.df, aes(x = total_pymnt))+ geom_histogram(bins = 50) + scale_x_continuous(labels = scales::comma),
+  ggplot(z.df, aes(x = total_rec_prncp))+ geom_histogram(bins = 50) + scale_x_continuous(labels = scales::comma),
+  ggplot(z.df, aes(x = total_rec_int))+ geom_histogram(bins = 50) + scale_x_continuous(labels = scales::comma),
+  ggplot(z.df, aes(x = last_pymnt_amnt))+ geom_histogram(bins = 50) + scale_x_continuous(labels = scales::comma),
+nrow=7)
+```
+
+```{r}
+# remove outlier z-score more than +- 4, for comparison the result (20 outliers)
+z.outl.df <- z.df %>% filter(loan_amnt < 4 & loan_amnt > -4 & 
+                            int_rate < 4 & int_rate > -4 &
+                            installment < 4 & installment > -4 &
+                            annual_inc < 4 & annual_inc > -4 &
+                            dti < 4 & dti > -4 &
+                            inq_last_6mths < 4 & inq_last_6mths > -4 &
+                            open_acc < 4 & open_acc > -4 &
+                            revol_bal < 4 & revol_bal > -4 &
+                            revol_util < 4 & revol_util > -4 &
+                            total_acc < 4 & total_acc > -4 &
+                            total_pymnt < 4 & total_pymnt > -4 &
+                            total_rec_prncp < 4 & total_rec_prncp > -4 &
+                            total_rec_int < 4 & total_rec_int > -4 & 
+                            last_pymnt_amnt < 4 & last_pymnt_amnt > -4
+                               )
+                               
+summary(z.outl.df)
+```
+
+Our objective is to doing clustering analysis for market segmentation, doing so, we want to specify the few variables that contains enough information for doing cluster, specifically is to reduce dimension. In order to reduce dimension, we doing PCA and Factor analysis to find suitable method for handle our loan dataset.
+
+## Check criteria for PCA and FA
+
+```{r}
+# We check KMO and correlation of our dataset (now we test on 2 datasets, z.df without removing outlier and z.outl.df which removing outlier)
+
+# Correlation Matrix of dataset without removing outlier
+z.df.corr <- cor(z.df)
+lowerCor(z.df.corr)
+KMO(z.df.corr)
+cortest.bartlett(z.df.corr, n=500)
+
+# We observe overall KMO at 0.67, and Bartlett test P-value 0 (below 0.05) which is suitable for PCA and FA analysis
+
+```
+
+```{r}
+# Correlation Matrix of dataset that removed outlier
+z.df.outl.corr <- cor(z.outl.df)
+lowerCor(z.df.outl.corr)
+KMO(z.df.outl.corr)
+cortest.bartlett(z.df.outl.corr, n=480)
+
+# The overall KMO of data which remove outlier also above 0.5, and Bartlett test also P-value 0 (below 0.05) which is suitable for PCA and FA analysis
+
+```
+
+# PCA
+
+```{r}
+# Create PCA for data without remove outlier
+m.pc1 <-principal(z.df, 14, rotate="none",weights=TRUE, scores=TRUE)
+print(m.pc1)
+fscore_pc1 <- m.pc1$scores
+fscorematrix <- cor(fscore_pc1)
+lowerCor(fscore_pc1)
+print.psych(m.pc1, cut=0.4, sort=TRUE)
+plot(m.pc1$values,type="b")
+```
+
+```{r}
+# Create PCA for data which remove outlier
+m.pc1o <- principal(z.outl.df, 14, rotate="none",weights=TRUE, scores=TRUE)
+print(m.pc1o)
+fscore_pc1o <- m.pc1o$scores
+fscorematrix <- cor(fscore_pc1o)
+lowerCor(fscore_pc1o)
+print.psych(m.pc1o, cut=0.4, sort=TRUE)
+plot(m.pc1o$values,type="b")
+```
+The results of PCA, for both remove and keep outlier is not much different, but for the removed outlier data, PC tend to explain more variance than the data that keep outlier.
+
+
+## FA
+### FA on PC extraction
+```{r}
+# Try FA on data without removing outlier --- FA on PC - Oblique Rotation
+m.FAPC <-principal(z.df, 14, rotate="oblimin")
+print(m.FAPC)
+fscore_FAPC <- m.FAPC$scores
+fscorematrix <- cor(fscore_FAPC)
+lowerCor(fscore_FAPC)
+print.psych(m.FAPC, cut=0.4, sort=TRUE)
+plot(m.FAPC$values,type="b")
+```
+
+```{r}
+# Try FA on data which removing outlier --- FA on PC - Oblique Rotation
+m.FAPCo <-principal(z.outl.df, 14, rotate="oblimin")
+print(m.FAPCo)
+fscore_FAPCo <- m.FAPCo$scores
+fscorematrix <- cor(fscore_FAPCo)
+lowerCor(fscore_FAPCo)
+print.psych(m.FAPCo, cut=0.4, sort=TRUE)
+plot(m.FAPCo$values,type="b")
+```
+
+```{r}
+# Try FA on data without removing outlier --- FA on PC - Orthogonal Rotation ----- > 3rd model
+m.FAPC2 <-principal(z.df, 14, rotate="quartimax")
+print(m.FAPC2)
+fscore_FAPC2 <- m.FAPC2$scores
+fscorematrix <- cor(fscore_FAPC2)
+lowerCor(fscore_FAPC2)
+print.psych(m.FAPC2, cut=0.4, sort=TRUE)
+plot(m.FAPC2$values,type="b")
+```
+
+```{r}
+# Try FA on data which removing outlier --- FA on PC - Orthogonal Rotation
+m.FAPC2o <-principal(z.outl.df, 14, rotate="quartimax")
+print(m.FAPC2o)
+fscore_FAPC2o <- m.FAPC2o$scores
+fscorematrix <- cor(fscore_FAPC2o)
+lowerCor(fscore_FAPC2o)
+print.psych(m.FAPC2o, cut=0.4, sort=TRUE)
+plot(m.FAPC2o$values,type="b")
+```
+
+
+
+### FA Maximal Likelihood
+
+
+```{r}
+# Try FA on data without removing outlier --- FA on ML - no rotate
+m.FAML1 <- fa(z.df, 14, n.obs=500, rotate="none", fm="ml")
+print(m.FAML1)
+fscore_FAML1 <- m.FAML1$scores
+fscorematrix <- cor(fscore_FAML1)
+lowerCor(fscore_FAML1)
+print.psych(m.FAML1, cut=0.4, sort=TRUE)
+plot(m.FAML1$values,type="b")
+fa.diagram(m.FAML1)
+
+```
+
+```{r}
+# Try FA on data removing outlier --- FA on ML - no rotate ---------------------------- 1st, Model
+m.FAML1o <-fa(z.outl.df, 14, n.obs=480, rotate="none", fm="ml")
+print(m.FAML1o)
+fscore_FAML1o <- m.FAML1o$scores
+fscorematrix <- cor(fscore_FAML1o)
+lowerCor(fscore_FAML1o)
+print.psych(m.FAML1o, cut=0.4, sort=TRUE)
+plot(m.FAML1o$values,type="b")
+fa.diagram(m.FAML1o)
+
+```
+
+
+
+
+```{r}
+# Try FA on data without removing outlier --- FA on ML - Oblique
+m.FAML2 <- fa(z.df, 14, n.obs=500, rotate="oblimin", fm="ml")
+print(m.FAML2)
+fscore_FAML2 <- m.FAML2$scores
+fscorematrix <- cor(fscore_FAML2)
+lowerCor(fscore_FAML2)
+print.psych(m.FAML2, cut=0.4, sort=TRUE)
+plot(m.FAML2$values,type="b")
+fa.diagram(m.FAML2)
+
+```
+
+```{r}
+# Try FA on data removing outlier --- FA on ML - Oblique
+m.FAML2o <-fa(z.outl.df, 14, n.obs=480, rotate="oblimin", fm="ml")
+print(m.FAML2o)
+fscore_FAML2o <- m.FAML2o$scores
+fscorematrix <- cor(fscore_FAML2o)
+lowerCor(fscore_FAML2o)
+print.psych(m.FAML2o, cut=0.4, sort=TRUE)
+plot(m.FAML2o$values,type="b")
+fa.diagram(m.FAML2o)
+
+```
+
+```{r}
+# Try FA on data without removing outlier --- FA on ML - Orthogonal rotation --------- 2nd, model
+m.FAML3 <- fa(z.df, 14, n.obs=500, rotate="varimax", fm="ml")
+print(m.FAML3)
+fscore_FAML3 <- m.FAML3$scores
+fscorematrix <- cor(fscore_FAML3)
+lowerCor(fscore_FAML3)
+print.psych(m.FAML3, cut=0.4, sort=TRUE)
+plot(m.FAML3$values,type="b")
+fa.diagram(m.FAML3)
+
+```
+
+```{r}
+# Try FA on data removing outlier --- FA on ML - Orthogonal rotation 
+m.FAML3o <- fa(z.outl.df, 14, n.obs=480, rotate="varimax", fm="ml")
+print(m.FAML3o)
+fscore_FAML3o <- m.FAML3o$scores
+fscorematrix <- cor(fscore_FAML3o)
+lowerCor(fscore_FAML3o)
+print.psych(m.FAML3o, cut=0.4, sort=TRUE)
+plot(m.FAML3o$values,type="b")
+fa.diagram(m.FAML3o)
+
+```
+
+from the PCA and Factor Results, we think that the components of FA - Maximum Likelihood with no rotation and FA - Maximum Likelihood with Oblique rotation make sense for reduce dimension, both model can explain variance around 70% within 3 components while contain majority of variables information. Moreover, both model correlation matrix did not show highly multicollinearity (>0.8) between each component which is suitable for use in cluster analysis. And we consider between using data that keep outlier and remove outlier, we found that, fot the data that keep outlier, it has less cross-loading but also explain less variance compare to data that remove outlier and the cross-loading appear in total_record_interest, which basicly depend on loan amount and interest rate and make sense to cross-load on to 2 components we have. In conclusion, we dicide to do further analysis on the dataset that have less cross-loading (keep outlier) because the different in variance explained is not much compare to the cross-loading, furthermore, we will remove multivariate outlier again in cluster analysis.
+
+
+
+### Note --*** if want to reduce dimensional > use ML > 2 - 3 components is enough to cover 60% - 70% variance, easy to interprete, have some correlation but still below 0.8
+### *** if want to use FA on PC > will result in 5 components to cover 60%, no multi
+
+
+```{r}
+# Try FA on data without removing outlier --- FA on ML - no rotate - run again with 3 components
+m.FAMLa <- fa(z.df, 3, n.obs=500, rotate="none", fm="ml", scores="regression")
+print(m.FAMLa)
+fscore_FAMLa <- m.FAMLa$scores
+fscorematrix <- cor(fscore_FAMLa)
+lowerCor(fscore_FAMLa)
+print.psych(m.FAMLa, cut=0.4, sort=TRUE)
+plot(m.FAMLa$values,type="b")
+fa.diagram(m.FAMLa)
+
+```
+
+```{r}
+# Prepare dataframe for further analysis - Model 1 - FA - ML - no rotate
+head(m.FAMLa$scores, 10)
+CA.df.FAMLa <- cbind(m.FAMLa$scores)
+```
+
+
+
+
+
+
+
+```{r}
+# Try FA on data without removing outlier --- FA on ML - Orthogonal rotation - run again with 2 components
+m.FAMLb <- fa(z.df, 3, n.obs=500, rotate="varimax", fm="ml")
+print(m.FAMLb)
+fscore_FAMLb <- m.FAMLb$scores
+fscorematrix <- cor(fscore_FAMLb)
+lowerCor(fscore_FAMLb)
+print.psych(m.FAMLb, cut=0.4, sort=TRUE)
+plot(m.FAMLb$values,type="b")
+fa.diagram(m.FAMLb)
+
+```
+
+```{r}
+# Prepare dataframe for further analysis - Model 2 - FA - ML - Orthogonal rotation
+head(m.FAMLb$scores, 10)
+CA.df.FAMLb <- cbind(m.FAMLb$scores)
+```
+
+```{r}
+# Try FA on data without removing outlier --- FA on PC - Orthogonal Rotation ----- > 3rd model
+m.FAPCc <-principal(z.df, 5, rotate="quartimax")
+print(m.FAPCc)
+fscore_FAPCc <- m.FAPCc$scores
+fscorematrix <- cor(fscore_FAPCc)
+lowerCor(fscore_FAPCc)
+print.psych(m.FAPCc, cut=0.4, sort=TRUE)
+plot(m.FAPCc$values,type="b")
+```
+
+```{r}
+# Prepare dataframe for further analysis - Model 3 - FA - PC - Orthogonal rotation
+head(m.FAPCc$scores, 10)
+CA.df.FAPCc <- cbind(m.FAPCc$scores)
+```
+## Clustering
+
+Model 1 - FA - ML - no rotate
+```{r}
+# Calculate Mahalanobis distance to identify multivariate outliers
+Maha.FAMLa <- mahalanobis(CA.df.FAMLa, colMeans(CA.df.FAMLa),cov(CA.df.FAMLa))
+print(Maha.FAMLa)
+```
+```{r}
+Maha.FAMLa.Pv <-pchisq(Maha.FAMLa,df=2,lower.tail = FALSE)
+print(Maha.FAMLa.Pv)
+print(sum(Maha.FAMLa.Pv<0.001))
+```
+
+```{r}
+# Remove the outlier where Mahalanobis P-Value less than 0.001 (22)
+CA.df.FAMLa <- data.frame(cbind(CA.df.FAMLa, Maha.FAMLa, Maha.FAMLa.Pv))
+CA.df.FAMLa <- CA.df.FAMLa %>% filter(Maha.FAMLa.Pv >= 0.001)
+```
+
+Model 2 - FA - ML - Orthogonal rotation
+```{r}
+# Calculate Mahalanobis distance to identify multivariate outliers
+Maha.FAMLb <- mahalanobis(CA.df.FAMLb, colMeans(CA.df.FAMLb),cov(CA.df.FAMLb))
+print(Maha.FAMLb)
+```
+
+```{r}
+Maha.FAMLb.Pv <-pchisq(Maha.FAMLb,df=2,lower.tail = FALSE)
+print(Maha.FAMLb.Pv)
+print(sum(Maha.FAMLb.Pv<0.001))
+```
+
+```{r}
+# Remove the outlier where Mahalanobis P-Value less than 0.001 (22)
+original.df <- data.frame(cbind(CA.df.FAMLb, Maha.FAMLb, Maha.FAMLb.Pv))
+original.df$index <- 1:nrow(original.df)
+original.df <- original.df %>% filter(Maha.FAMLb.Pv >= 0.001)
+```
+
+
+Model 3 - FA - PC - Orthogonal rotation
+```{r}
+# Calculate Mahalanobis distance to identify multivariate outliers
+Maha.FAPCc <- mahalanobis(CA.df.FAPCc, colMeans(CA.df.FAPCc),cov(CA.df.FAPCc))
+print(Maha.FAPCc)
+```
+```{r}
+Maha.FAPCc.Pv <-pchisq(Maha.FAPCc,df=2,lower.tail = FALSE)
+print(Maha.FAPCc.Pv)
+print(sum(Maha.FAPCc.Pv<0.001))
+```
+
+```{r}
+# Remove the outlier where Mahalanobis P-Value less than 0.001 (20)
+CA.df.FAPCc <- data.frame(cbind(CA.df.FAPCc, Maha.FAPCc, Maha.FAPCc.Pv))
+CA.df.FAPCc <- CA.df.FAPCc %>% filter(Maha.FAPCc.Pv >= 0.001)
+```
+
+
+## Check assumption for Clustering
+
+```{r}
+# Drop column Mahalanobis distance and P-Value
+CA.df.FAMLa = subset(CA.df.FAMLa, select = -c(Maha.FAMLa, Maha.FAMLa.Pv) )
+CA.df.FAMLb = subset(original.df, select = -c(Maha.FAMLb, Maha.FAMLb.Pv, index) )
+CA.df.FAPCc = subset(CA.df.FAPCc, select = -c(Maha.FAPCc, Maha.FAPCc.Pv) )
+
+# Check Correlation Matrix
+lowerCor(CA.df.FAMLa)
+lowerCor(CA.df.FAMLb)
+lowerCor(CA.df.FAPCc)
+
+# Because we do cluster on PC/Factor, so the components is now shown high correlation between each variable (>0.8), the dataset is suitable for cluster.
+```
+
+## Clustering
+
+
+Model A
+```{r}
+# Define function to calculate agglomerative coefficient
+m <- c("average", "single", "complete", "ward")
+names(m) <- c( "average", "single", "complete", "ward")
+```
+
+## Model A
+```{r}
+ac.a <- function(x) {
+  agnes(CA.df.FAMLa, method = x)$ac
+}
+```
+
+Calculate agglomerative coefficient
+```{r}
+sapply(m, ac.a)
+```
+
+calculate gap statistic for each number of clusters (up to 10 clusters)
+```{r}
+gap.h.a <- clusGap(CA.df.FAMLa, FUN = hcut, nstart = 25, K.max = 10, B = 50)
+fviz_gap_stat(gap.h.a)
+```
+
+For Model A (FA - ML - no rotate), the agglomerative coefficient show that ward's distance method is the most suitable for hierarchical clustering, and the recommend number of K is 3 clusters (first peak)
+
+Finding distance matrix
+```{r}
+distance_mat.a <- dist(CA.df.FAMLa, method = 'euclidean')
+```
+
+Fitting Hierarchical clustering Model to dataset
+
+```{r}
+set.seed(240)  # Setting seed
+Hierar_cl.a <- hclust(distance_mat.a, method = "ward")
+Hierar_cl.a
+```
+
+Plotting dendrogram
+```{r}
+plot(Hierar_cl.a)
+```
+
+Choosing no. of clusters
+
+Cutting tree by no. of clusters
+```{r}
+CA.a.fit_3 <- cutree(Hierar_cl.a, k = 3)
+```
+
+Find number of observations in each cluster
+```{r}
+table(CA.a.fit_3)
+```
+
+```{r}
+CA.a.final_data_3 <-cbind(CA.df.FAMLa, cluster = CA.a.fit_3)
+```
+
+Display first six rows of final data
+```{r}
+head(CA.a.final_data_3)
+```
+
+Find mean values for each cluster
+```{r}
+CA.a.hcentres_3 <-aggregate(x=CA.a.final_data_3, by=list(cluster=CA.a.fit_3), FUN="mean")
+print(CA.a.hcentres_3)
+```
+
+Kmeans clustering
+```{r}
+set.seed(240)
+CA.a.k_3 <- kmeans(CA.df.FAMLa,3,nstart=25)
+CA.a.k_3
+```
+
+
+```{r}
+fviz_cluster(CA.a.k_3, data= CA.df.FAMLa, geom = "point", frame.type = "norm")
+
+res.a.k_3 <-eclust(CA.df.FAMLa, "kmeans", nstart = 25)
+
+fviz_silhouette(res.a.k_3)
+
+```
+
+
+
+
+## Model B
+```{r}
+ac.b <- function(x) {
+  agnes(CA.df.FAMLb, method = x)$ac
+}
+```
+Calculate agglomerative coefficient
+```{r}
+sapply(m, ac.b)
+```
+```{r}
+gap.h.b <- clusGap(CA.df.FAMLb, FUN = hcut, nstart = 25, K.max = 10, B = 50)
+fviz_gap_stat(gap.h.b)
+```
+
+For Model B (FA - ML - Orthogonal rotation), the agglomerative coefficient also show that ward's distance method is the most suitable for hierarchical clustering, and the recommend number of K is 3 clusters (first peak)
+
+Finding distance matrix
+```{r}
+distance_mat.b <- dist(CA.df.FAMLb, method = 'euclidean')
+```
+
+Fitting Hierarchical clustering Model to dataset
+
+```{r}
+set.seed(240)  # Setting seed
+Hierar_cl.b <- hclust(distance_mat.b, method = "ward")
+Hierar_cl.b
+```
+
+Plotting dendrogram
+```{r}
+plot(Hierar_cl.b)
+```
+
+Choosing no. of clusters
+
+Cutting tree by no. of clusters
+```{r}
+CA.b.fit_3 <- cutree(Hierar_cl.b, k = 3)
+```
+Find number of observations in each cluster
+```{r}
+table(CA.b.fit_3)
+```
+
+```{r}
+CA.b.final_data_3 <-cbind(CA.df.FAMLb, cluster = CA.b.fit_3)
+```
+
+Display first six rows of final data
+```{r}
+head(CA.b.final_data_3)
+```
+
+Find mean values for each cluster
+```{r}
+CA.b.hcentres_3 <-aggregate(x=CA.b.final_data_3, by=list(cluster=CA.b.fit_3), FUN="mean")
+print(CA.b.hcentres_3)
+```
+
+Kmeans clustering
+```{r}
+set.seed(240)
+CA.b.k_3 <- kmeans(CA.df.FAMLb,3,nstart=25)
+CA.b.k_3
+```
+
+
+```{r}
+fviz_cluster(CA.b.k_3, data= CA.df.FAMLb, geom = "point", frame.type = "norm")
+
+res.b.k_3 <-eclust(CA.df.FAMLb, "kmeans", nstart = 25)
+
+fviz_silhouette(res.b.k_3)
+
+```
+
+
+
+Model C
+```{r}
+ac.c <- function(x) {
+  agnes(CA.df.FAPCc, method = x)$ac
+}
+```
+Calculate agglomerative coefficient
+```{r}
+sapply(m, ac.c)
+```
+```{r}
+gap.h.c <- clusGap(CA.df.FAPCc, FUN = hcut, nstart = 25, K.max = 10, B = 50)
+fviz_gap_stat(gap.h.c)
+```
+
+For Model C (FA - PC - Orthogonal rotation), the agglomerative coefficient also show that ward's distance method is the most suitable for hierarchical clustering, and the recommend number of K is 3 and 5 clusters, for the model C, we will use 3 and 5 to clustering.
+
+
+## Clustering for 3 groups
+
+Finding distance matrix
+```{r}
+distance_mat.c1 <- dist(CA.df.FAPCc, method = 'euclidean')
+```
+
+Fitting Hierarchical clustering Model to dataset
+
+```{r}
+set.seed(240)  # Setting seed
+Hierar_cl.c1 <- hclust(distance_mat.c1, method = "ward")
+Hierar_cl.c1
+```
+
+Plotting dendrogram
+```{r}
+plot(Hierar_cl.c1)
+```
+
+Choosing no. of clusters
+
+Cutting tree by no. of clusters
+```{r}
+CA.c1.fit_3 <- cutree(Hierar_cl.c1, k = 3 )
+```
+Find number of observations in each cluster
+```{r}
+table(CA.c1.fit_3)
+```
+
+```{r}
+CA.c1.final_data_3 <-cbind(CA.df.FAPCc, cluster = CA.c1.fit_3)
+```
+
+Display first six rows of final data
+```{r}
+head(CA.c1.final_data_3)
+```
+
+Find mean values for each cluster
+```{r}
+CA.c1.hcentres_3 <-aggregate(x=CA.c1.final_data_3, by=list(cluster=CA.c1.fit_3), FUN="mean")
+print(CA.c1.hcentres_3)
+```
+
+Kmeans clustering
+```{r}
+set.seed(240)
+CA.c1.k_3 <- kmeans(CA.df.FAPCc,3,nstart=25)
+CA.c1.k_3
+```
+
+
+```{r}
+fviz_cluster(CA.c1.k_3, data= CA.df.FAPCc, geom = "point", frame.type = "norm")
+res.c1.k_3 <-eclust(CA.df.FAPCc, "kmeans", nstart = 25, k=3)
+fviz_silhouette(res.c1.k_3)
+```
+
+## Clustering for 5 groups
+
+Finding distance matrix
+```{r}
+distance_mat.c2 <- dist(CA.df.FAPCc, method = 'euclidean')
+```
+
+Fitting Hierarchical clustering Model to dataset
+
+```{r}
+set.seed(240)  # Setting seed
+Hierar_cl.c2 <- hclust(distance_mat.c2, method = "ward")
+Hierar_cl.c2
+```
+
+Plotting dendrogram
+```{r}
+plot(Hierar_cl.c2)
+```
+
+Choosing no. of clusters
+
+Cutting tree by no. of clusters
+```{r}
+CA.c2.fit_5 <- cutree(Hierar_cl.c2, k = 5 )
+```
+Find number of observations in each cluster
+```{r}
+table(CA.c2.fit_5)
+```
+
+```{r}
+CA.c2.final_data_5 <-cbind(CA.df.FAPCc, cluster = CA.c2.fit_5)
+```
+
+Display first six rows of final data
+```{r}
+head(CA.c2.final_data_5)
+```
+
+Find mean values for each cluster
+```{r}
+CA.c2.hcentres_5 <-aggregate(x=CA.c2.final_data_5, by=list(cluster=CA.c2.fit_5), FUN="mean")
+print(CA.c2.hcentres_5)
+```
+
+Kmeans clustering
+```{r}
+set.seed(240)
+CA.c2.k_5 <- kmeans(CA.df.FAPCc, 5, nstart=25)
+CA.c2.k_5
+```
+
+
+```{r}
+fviz_cluster(CA.c2.k_5, data= CA.df.FAPCc, geom = "point", frame.type = "norm")
+res.c2.k_5 <-eclust(CA.df.FAPCc, "kmeans", nstart = 25, k=5)
+fviz_silhouette(res.c2.k_5)
+
+```
+
+## Validation - Model A
+```{r}
+# chosee the validation set
+set.seed(20)
+vali_FAMLa <- sample(1:nrow(CA.df.FAMLa), 100, replace = FALSE, prob = NULL)
+validf.FAMLa <- CA.df.FAMLa[vali_FAMLa, ]
+
+subset_cluster_assignments <- kmeans(validf.FAMLa, centers = CA.a.k_3$centers, iter.max = 10, nstart = 1)$cluster
+validf.FAMLa <- as.data.frame(validf.FAMLa)
+validf.FAMLa$validation_result <- subset_cluster_assignments
+previous_result_FAMLa3 <- CA.a.k_3$cluster[vali_FAMLa]
+validf.FAMLa$previous_result <- previous_result_FAMLa3 
+validf.FAMLa <- validf.FAMLa %>% 
+  mutate(difference = validation_result - previous_result_FAMLa3)
+accuracy_modelA <- sum(validf.FAMLa$difference == 0) / nrow(validf.FAMLa)
+accuracy_modelA
+```
+
+## Validation - Model A (5 iterations)
+```{r}
+set.seed(10) # Ensure reproducibility
+total_accuracy <- numeric(5) # Initialize a vector to store accuracy for each iteration
+
+for (i in 1:5) {
+  # Randomly select 100 data points for the validation set
+  vali_indices <- sample(1:nrow(CA.df.FAMLa), 100, replace = FALSE)
+  validation_df <- CA.df.FAMLa[vali_indices, ]
+  
+  # Apply k-means clustering to the validation set using predefined centers
+  subset_cluster_assignments <- kmeans(validation_df, centers = CA.a.k_3$centers, iter.max = 10, nstart = 1)$cluster
+  
+  # Add clustering results to the validation dataframe
+  validation_df <- as.data.frame(validation_df)
+  validation_df$validation_result <- subset_cluster_assignments
+  
+  # Retrieve the previous clustering results for the selected validation indices
+  previous_result <- CA.a.k_3$cluster[vali_indices]
+  validation_df$previous_result <- previous_result
+  
+  # Calculate the difference between new and previous clustering results
+  validation_df <- validation_df %>% mutate(difference = validation_result - previous_result)
+  
+  # Calculate and store the accuracy for the current iteration
+  accuracy <- sum(validation_df$difference == 0) / nrow(validation_df)
+  total_accuracy[i] <- accuracy
+}
+
+# Calculate the mean accuracy across all iterations
+mean_accuracy_modelA <- mean(total_accuracy)
+mean_accuracy_modelA
+```
+
+
+## Validation - Model B
+```{r}
+# choose the validation set
+set.seed(20)
+vali_modelB <- sample(1:nrow(CA.df.FAMLb), 100, replace = FALSE, prob = NULL)
+validf.modelB <- CA.df.FAMLb[vali_modelB, ]
+
+subset_cluster_assignments <- kmeans(validf.modelB, centers = CA.b.k_3$centers, iter.max = 10, nstart = 1)$cluster
+validf.modelB <- as.data.frame(validf.modelB)
+validf.modelB$validation_result <- subset_cluster_assignments
+previous_result_modelB <- CA.b.k_3$cluster[vali_modelB]
+validf.modelB$previous_result <- previous_result_modelB 
+validf.modelB <- validf.modelB %>% 
+  mutate(difference = validation_result - previous_result_modelB)
+accuracy_modelB <- sum(validf.modelB$difference == 0) / nrow(validf.modelB)
+accuracy_modelB
+```
+
+## Validation - Model B (5 iterations)
+```{r}
+set.seed(10) # Ensure reproducibility
+total_accuracy <- numeric(5) # Initialize a vector to store accuracy for each iteration
+
+for (i in 1:5) {
+  # Randomly select 100 data points for the validation set
+  vali_indices <- sample(1:nrow(CA.df.FAMLb), 100, replace = FALSE)
+  validation_df <- CA.df.FAMLb[vali_indices, ]
+  
+  # Apply k-means clustering to the validation set using predefined centers
+  subset_cluster_assignments <- kmeans(validation_df, centers = CA.b.k_3$centers, iter.max = 10, nstart = 1)$cluster
+  
+  # Add clustering results to the validation dataframe
+  validation_df <- as.data.frame(validation_df)
+  validation_df$validation_result <- subset_cluster_assignments
+  
+  # Retrieve the previous clustering results for the selected validation indices
+  previous_result <- CA.b.k_3$cluster[vali_indices]
+  validation_df$previous_result <- previous_result
+  
+  # Calculate the difference between new and previous clustering results
+  validation_df <- validation_df %>% mutate(difference = validation_result - previous_result)
+  
+  # Calculate and store the accuracy for the current iteration
+  accuracy <- sum(validation_df$difference == 0) / nrow(validation_df)
+  total_accuracy[i] <- accuracy
+}
+
+# Calculate the mean accuracy across all iterations
+mean_accuracy_modelB <- mean(total_accuracy)
+mean_accuracy_modelB
+```
+
+## Validation - Model C1 (3 clusters)
+```{r}
+# choose the validation set
+set.seed(10)
+vali_modelC.1 <- sample(1:nrow(CA.df.FAPCc), 100, replace = FALSE, prob = NULL)
+validf.modelC.1 <- CA.df.FAPCc[vali_modelC.1, ]
+
+subset_cluster_assignments <- kmeans(validf.modelC.1, centers = CA.c1.k_3$centers, iter.max = 10, nstart = 1)$cluster
+validf.modelC.1 <- as.data.frame(validf.modelC.1)
+validf.modelC.1$validation_result <- subset_cluster_assignments
+previous_result_modelC <- CA.c1.k_3$cluster[vali_modelC.1]
+validf.modelC.1$previous_result <- previous_result_modelC 
+validf.modelC.1 <- validf.modelC.1 %>% 
+  mutate(difference = validation_result - previous_result_modelC)
+accuracy_modelC1 <- sum(validf.modelC.1$difference == 0) / nrow(validf.modelC.1)
+accuracy_modelC1
+```
+
+## Validation - Model C2 (5 clusters)
+```{r}
+# choose the validation set
+set.seed(10)
+vali_modelC.2 <- sample(1:nrow(CA.df.FAPCc), 100, replace = FALSE, prob = NULL)
+validf.modelC.2 <- CA.df.FAPCc[vali_modelC.2, ]
+
+subset_cluster_assignments <- kmeans(validf.modelC.2, centers = CA.c2.k_5$centers, iter.max = 10, nstart = 1)$cluster
+validf.modelC.2 <- as.data.frame(validf.modelC.2)
+validf.modelC.2$validation_result <- subset_cluster_assignments
+previous_result_modelC <- CA.c2.k_5$cluster[vali_modelC.2]
+validf.modelC.2$previous_result <- previous_result_modelC 
+validf.modelC.2 <- validf.modelC.2 %>% 
+  mutate(difference = validation_result - previous_result_modelC)
+accuracy_modelC2 <- sum(validf.modelC.2$difference == 0) / nrow(validf.modelC.2)
+accuracy_modelC2
+```
+
+
+The results show that the results of model A and model B are the same. But model A contains less cross-loadings, so we select Model B as the best model.
+
+## Interpretation (Vicky)
+```{r}
+final_data <- sp.df[original.df$index, ]
+final_data$cluster <- CA.b.k_3$cluster
+
+final_data_with_categories <- Original_data_wo_outliers_sample[original.df$index, ]
+final_data_with_categories$cluster <- CA.b.k_3$cluster
+
+#Just to check if we have the same records
+print(final_data$loan_amnt - final_data_with_categories$loan_amnt)
+print(final_data$annual_inc - final_data_with_categories$annual_inc)
+
+```
+
+
+Cluster 1 - Loan amounts are in the mid range and interest rate is all over the place (low - high)
+
+Cluster 2 - Loan amounts are in the lower range and interest rate is in the high range. (15%-20%)
+
+cluster 3 - Loan amounts are high and interest rate ranges from low to high
+
+### Customer loan proflie
+```{r}
+# Customer Loan Profile - Loan Amount & Interest Rate & Term
+ggplot(final_data_with_categories, 
+       aes(x = loan_amnt, y = int_rate, color= as.factor(cluster))) +
+  geom_point(alpha =0.6, size = 2 ) +
+  labs(y = "Interest Rate", x = "Loan Amount", color = "Cluster", title = "Distribution of Clusters across Loan Amount and Interest Rate") +
+  theme_minimal()
+```
+
+```{r}
+# Customer Loan Profile - Loan Amount & Grade
+ggplot(final_data_with_categories, 
+       aes(y = loan_amnt, x = as.factor(grade), color= as.factor(cluster) )) +
+  geom_point(alpha =0.6, size = 2  ) +
+  labs(x = "Grade", y = "Loan Amount", color = "Cluster", title = "Distribution of Clusters across Grade and Loan Amount") +
+  theme_minimal()
+```
+Not much different between cluster in each grade, but it has characteristic in loan amount
+
+```{r}
+# Customer Loan Profile - Loan Amount & Installment amount
+ggplot(final_data_with_categories, 
+       aes(x = loan_amnt, y = installment, color= as.factor(cluster) )) +
+  geom_point(alpha =0.6, size = 2  ) +
+  labs(y = "Installment", x = "Loan Amount", color = "Cluster", title = "Distribution of Clusters across Installment and Loan Amount") +
+  theme_minimal()
+```
+For loan_amount and Installment it's shown that cluster 1 is in the middle loan size and small installment,
+while cluster 2 is the small loan size and small paymenyt,
+last, cluster 3 is large loan size with high installment.
+
+```{r}
+# Customer Loan Profile - Loan Amount & Annual Income & loan_is_bad status
+ggplot(final_data_with_categories, 
+       aes(y = loan_amnt, x = annual_inc, color= as.factor(cluster), group=as.factor(loan_is_bad))) +
+  geom_point(alpha = 0.6, size = 2, aes(shape = as.factor(loan_is_bad))) +
+  scale_x_continuous(labels = label_number()) +  # Format x-axis labels as regular numbers
+  labs(x = "Annual Income", y = "Loan Amount", color = "Cluster", shape = "Loan is Bad") +
+  theme_minimal()
+```
+
+
+```{r}
+# Customer Loan Profile - Purpose
+summary_data <- final_data_with_categories %>%
+  group_by(purpose, cluster) %>%
+  summarise(count = n(), .groups = 'drop') %>%
+  ungroup() %>%
+  group_by(purpose) %>%
+  mutate(total = sum(count), 
+         percentage = count / total * 100) %>%
+  ungroup() # Ungroup if you're done with group-based calculations
+
+# Step 2: Plot the bar chart and add the percentages as text
+ggplot(summary_data, aes(x = purpose, y = count, fill = as.factor(cluster))) +
+  geom_bar(stat = "identity", position = position_dodge(width = 0.75), color = "black") +
+  geom_text(aes(label = sprintf("%.0f%%", percentage), y = count), 
+            position = position_dodge(width = 0.75), vjust = -0.25, size = 3) +
+  labs(x = "Purpose", y = "Count of Customers", fill = "Cluster", title ="Distribution of Customers by Cluster across Purpose") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1), 
+        plot.margin = unit(c(1, 1, 1, 1), "lines"))
+# change the bar chart
+```
+The cluster 1 and 3 show that they using loan for debt_consolidation and credit card ,while the group 2 spared across all purpose
+
+
+### Customer payment behaviour
+
+
+For cluster 1, there was no fully paid status, only for current and charged off, but for our sample, the number of in grace period until late is not have much observations to analyse.
+Moreover, the cluster 3 are the majority in Fully Paid, which can be conclude that the cluster 1 can be high risk loan, while cluster 3 is the loan with low risk of default.
+
+```{r}
+# Customer Loan Profile - Recovery & total payment
+ggplot(final_data_with_categories, 
+       aes(y = recoveries, x = total_pymnt, color= as.factor(cluster) )) +
+  geom_point(alpha =0.6, size = 2  ) +
+  labs(y = "Recoveries", x = "Total Payment", color = "Cluster", title = "Distribution of Clusters across Recoveries and Total Payment") +
+  theme_minimal()
+```
+
+### Customer Informations
+
+```{r}
+# Customer Loan Profile - Loan Status & Total Payment
+ggplot(final_data_with_categories, 
+       aes(y = annual_inc, x = as.factor(home_ownership), color= as.factor(cluster) )) +
+  geom_point(alpha =0.6, size = 2  )+
+  scale_y_continuous(labels = scales::comma)
+#try building a bar chart
+```
+
+Home Ownership by Clusters
+
+```{r}
+summary_data <- final_data_with_categories %>%
+  group_by(home_ownership, cluster) %>%
+  summarise(count = n(), .groups = 'drop') %>%
+  ungroup() %>%
+  group_by(home_ownership) %>%
+  mutate(total = sum(count), 
+         percentage = count / total * 100) %>%
+  ungroup() 
+
+# Step 2: Plot the bar chart and add the percentages as text
+ggplot(summary_data, aes(x = home_ownership, y = count, fill = as.factor(cluster))) +
+  geom_bar(stat = "identity", position = position_dodge(width = 0.75), color = "black") +
+  geom_text(aes(label = sprintf("%.0f (%.1f%%)", count, percentage), y = count), 
+            position = position_dodge(width = 0.75), vjust = -0.25, size = 3)+
+  labs(x = "Home Ownership", y = "Count of Customers", fill = "Cluster", title ="Distribution of Customers by Cluster across Home Ownership") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1), 
+        plot.margin = unit(c(1, 1, 1, 1), "lines"))
+```
+
+
+Home ownership and Employment length do not show the difference between cluster.
+
+#Savvina
+
+```{r}
+final_data_with_categories %>%
+  group_by(cluster) %>%
+  summarise(count_cluster = n())
+
+#Calculate the number of bad and good loans and the percentage of bad loans in each cluster
+final_data_with_categories %>%
+  group_by(cluster) %>%
+  summarise(count_false = sum(loan_is_bad == 0),
+            count_true = sum(loan_is_bad == 1)) %>%
+  mutate(percentage_false = count_false / (count_false + count_true) * 100,
+         percentage_true = count_true / (count_false + count_true) * 100) %>%
+  select(cluster, count_false, count_true, percentage_false, percentage_true)
+```
+
+```{r}
+# Customer Loan Profile - Loan Status & Total Payment
+ggplot(final_data_with_categories, 
+       aes(y = total_pymnt, x = loan_status, color= as.factor(cluster) )) +
+  geom_point(alpha =0.6, size = 2  )
+```
+
+Loan Status by Clusters
+
+```{r}
+summary_data <- final_data_with_categories %>%
+  group_by(loan_status, cluster) %>%
+  summarise(count = n(), .groups = 'drop') %>%
+  ungroup() %>%
+  group_by(loan_status) %>%
+  mutate(total = sum(count), 
+         percentage = count / total * 100) %>%
+  ungroup() # Ungroup if you're done with group-based calculations
+
+# Step 2: Plot the bar chart and add the percentages as text
+ggplot(summary_data, aes(x = loan_status, y = count, fill = as.factor(cluster))) +
+  geom_bar(stat = "identity", position = position_dodge(width = 0.75), color = "black") +
+  geom_text(aes(label = sprintf("%.0f (%.1f%%)", count, percentage), y = count), 
+            position = position_dodge(width = 0.75), vjust = -0.25, size = 3) +
+  labs(x = "Loan Status", y = "Count of Customers", fill = "Cluster", title ="Distribution of Customers by Cluster across Loan Status") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1), 
+        plot.margin = unit(c(1, 1, 1, 1), "lines"))
+```
+
+Grade by Clusters
+
+```{r}
+summary_data <- final_data_with_categories %>%
+  group_by(grade, cluster) %>%
+  summarise(count = n(), .groups = 'drop') %>%
+  ungroup() %>%
+  group_by(grade) %>%
+  mutate(total = sum(count), 
+         percentage = count / total * 100) %>%
+  ungroup() # Ungroup if you're done with group-based calculations
+
+# Step 2: Plot the bar chart and add the percentages as text
+ggplot(summary_data, aes(x = grade, y = count, fill = as.factor(cluster))) +
+  geom_bar(stat = "identity", position = position_dodge(width = 0.75), color = "black") +
+  geom_text(aes(label = sprintf("%.0f (%.1f%%)", count, percentage), y = count), 
+            position = position_dodge(width = 0.75), vjust = -0.25, size = 3) +
+  labs(x = "Grade", y = "Count of Customers", fill = "Cluster", title ="Distribution of Customers by Cluster across Grade") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1), 
+        plot.margin = unit(c(1, 1, 1, 1), "lines"))
+```
+
